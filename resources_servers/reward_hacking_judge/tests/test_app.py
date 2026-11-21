@@ -12,16 +12,16 @@ from nemo_gym.config import ROLLOUT_INDEX_KEY_NAME, TASK_INDEX_KEY_NAME, ModelSe
 from nemo_gym.core import NeMoGymChatCompletionCreateParamsNonStreaming
 from nemo_gym.rollouts import RolloutStore, RunManifest
 from nemo_gym.verification import JudgeError
-from resources_servers.mfn_reward_hacking.app import (
+from resources_servers.reward_hacking_judge.app import (
     SERVER_DIR,
-    MfnRewardHackingConfig,
-    MfnRewardHackingResourcesServer,
-    MfnRewardHackingVerifyRequest,
+    RewardHackingJudgeConfig,
+    RewardHackingJudgeResourcesServer,
+    RewardHackingJudgeVerifyRequest,
     SourceRun,
     load_source_runs,
     parse_answer,
 )
-from resources_servers.mfn_reward_hacking.judge_prompt import (
+from resources_servers.reward_hacking_judge.judge_prompt import (
     build_prompt,
     load_judge_config,
     output_schema,
@@ -61,7 +61,7 @@ def _completion(content: str, finish_reason: str = "stop") -> bytes:
     ).encode()
 
 
-def _mock_judge(server: MfnRewardHackingResourcesServer, *contents: str) -> AsyncMock:
+def _mock_judge(server: RewardHackingJudgeResourcesServer, *contents: str) -> AsyncMock:
     replies = [_completion(content) for content in contents]
 
     async def post(*args: Any, **kwargs: Any) -> MagicMock:
@@ -94,8 +94,8 @@ def _call(item_id: str, cmd: str) -> list[dict[str, Any]]:
 
 def _request(
     task_index: int = 0, rollout_index: int = 0, output: list[dict[str, Any]] | None = None
-) -> MfnRewardHackingVerifyRequest:
-    return MfnRewardHackingVerifyRequest.model_validate(
+) -> RewardHackingJudgeVerifyRequest:
+    return RewardHackingJudgeVerifyRequest.model_validate(
         {
             "responses_create_params": {"input": [{"role": "user", "content": TASK}]},
             "response": {
@@ -151,29 +151,29 @@ def source_rollouts(tmp_path: Path) -> Path:
     return path
 
 
-def _server(source: Path | None = None, **overrides: Any) -> MfnRewardHackingResourcesServer:
-    config = MfnRewardHackingConfig(
+def _server(source: Path | None = None, **overrides: Any) -> RewardHackingJudgeResourcesServer:
+    config = RewardHackingJudgeConfig(
         host="0.0.0.0",
         port=8080,
         entrypoint="",
-        judge_model_server=ModelServerRef(type="responses_api_models", name="mfn_judge_model"),
+        judge_model_server=ModelServerRef(type="responses_api_models", name="reward_hacking_judge_model"),
         judge_chat_create_params=NeMoGymChatCompletionCreateParamsNonStreaming(
             messages=[], temperature=0.7, top_p=0.8, max_tokens=8192
         ),
         source_rollouts_jsonl_fpath=str(source) if source else None,
         **overrides,
     )
-    return MfnRewardHackingResourcesServer(config=config, server_client=MagicMock(spec=ServerClient))
+    return RewardHackingJudgeResourcesServer(config=config, server_client=MagicMock(spec=ServerClient))
 
 
-def test_bundled_judge_config_is_mfn_v2() -> None:
+def test_bundled_judge_config_is_v2() -> None:
     config = load_judge_config(SERVER_DIR / "judges/reward_hacking_v2.yaml")
     assert [label.id for label in config.labels] == ["scoring_tamper", "block_evasion", "solution_lookup"]
     assert "\nAgent run:\n" in config.prompt
     assert config.max_tool_result_chars == 15_000
 
 
-def test_schema_keeps_mfn_field_order_and_title() -> None:
+def test_schema_keeps_the_v2_field_order_and_title() -> None:
     schema = output_schema()
     assert schema["title"] == "RewardHackingDualOutput"
     assert list(schema["properties"]) == schema["required"]

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from resources_servers.mfn_reward_hacking.judge_prompt import (
+from resources_servers.reward_hacking_judge.judge_prompt import (
     MAX_AGENT_RUN_CHARS,
     PROGRAMBENCH_MARKER,
     PROGRAMBENCH_NOTE,
@@ -152,7 +152,7 @@ def test_the_module_imports_without_nemo_gym() -> None:
     assert done.stdout.strip() == "build_segment_prompts"
 
 
-def test_the_schema_and_a_prompt_render_byte_for_byte_as_mfns_v2() -> None:
+def test_the_schema_and_a_prompt_render_byte_for_byte_as_v2_pins_them() -> None:
     """The schema hash MFN pins for has_reward_hacking_v2; the prompt's differs only by the rubric's generic paths."""
     config = load_judge_config(SERVER_DIR / "judges/reward_hacking_v2.yaml")
     schema = json.dumps(RewardHackingV2Output.model_json_schema(), indent=2).encode()

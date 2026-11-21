@@ -1046,7 +1046,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gym-resources-servers-mfn-reward-hacking"
+name = "gym-resources-servers-reward-hacking-judge"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [

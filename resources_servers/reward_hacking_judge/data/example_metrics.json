@@ -1,7 +1,7 @@
 {
     "name": "example",
     "type": "example",
-    "jsonl_fpath": "resources_servers/mfn_reward_hacking/data/example.jsonl",
+    "jsonl_fpath": "resources_servers/reward_hacking_judge/data/example.jsonl",
     "num_repeats": 1,
     "source": null,
     "gitlab_identifier": null,

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [project]
-name = "gym-resources-servers-mfn-reward-hacking"
+name = "gym-resources-servers-reward-hacking-judge"
 version = "0.0.0"
 requires-python = ">=3.13.14"
 dependencies = [
