@@ -465,6 +465,7 @@ class TestAnswerOptions:
         result = await server.verify(_request(_split(r"\boxed{" + box + "}"), expected=reference))
         assert result.grading_status == ("math_verified" if library_match else "judged")
         assert result.reward == float(library_match)
+        assert result.model_dump().get("library_reward") == (1.0 if library_match else None)
         assert server.server_client.post.await_count == (0 if library_match else 1)
 
     @mark.parametrize("precision", [-1, 1.5, True])
@@ -503,6 +504,24 @@ class TestAnswerOptions:
         result = await server.verify(_request(_split(r"\boxed{2}")))
         server.server_client.post.assert_awaited_once()
         assert (result.reward, result.grading_status) == (1, "judged")
+
+    async def test_math_worker_is_reaped_if_reader_registration_fails(self, config, monkeypatch):
+        def busy_worker(*_):
+            time.sleep(5)
+
+        def unavailable_reader(*_):
+            raise OSError("Cannot watch the child process")
+
+        monkeypatch.setattr("resources_servers.stem_judge.boxed_math._score_box", busy_worker)
+        monkeypatch.setattr(asyncio.get_running_loop(), "add_reader", unavailable_reader)
+        config.boxed_judge_input = "box"
+        config.math_verify = MathVerifyConfig()
+        server = _server(config, "Judgement: 'yes'")
+        previous = set(mp.active_children())
+        result = await server.verify(_request(_split(r"\boxed{2}")))
+        assert set(mp.active_children()) <= previous
+        assert result.grading_status == "judged" and result.reward == 1
+        server.server_client.post.assert_awaited_once()
 
     async def test_cancelling_symbolic_workers_keeps_the_loop_responsive(self, config, monkeypatch, tmp_path):
         def unresponsive_worker(reference, *_):
@@ -551,6 +570,7 @@ class TestAnswerOptions:
 
     async def test_question_bank_preset_uses_json_and_the_environment_selects_math(self, config):
         preset = yaml.safe_load((SERVER_DIR / "configs/question_bank.yaml").read_text())
+        assert "math_verify" not in preset["stem_judge"]["resources_servers"]["stem_judge"]
         config = StemJudgeConfig.model_validate(
             config.model_dump() | preset["stem_judge"]["resources_servers"]["stem_judge"]
         )

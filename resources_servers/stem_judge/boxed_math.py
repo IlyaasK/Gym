@@ -99,13 +99,16 @@ class BoxedMathVerifier:
             receiver, sender = ctx.Pipe(duplex=False)
             with receiver, sender:
                 process = ctx.Process(target=_score_box, args=(reference, box, self.config, sender))
-                process.start()
-                sender.close()
                 loop = asyncio.get_running_loop()
                 exited = asyncio.Event()
-                loop.add_reader(process.sentinel, exited.set)
+                process.start()
                 try:
-                    await asyncio.wait_for(exited.wait(), self.config.timeout_seconds)
+                    sender.close()
+                    loop.add_reader(process.sentinel, exited.set)
+                    try:
+                        await asyncio.wait_for(exited.wait(), self.config.timeout_seconds)
+                    finally:
+                        loop.remove_reader(process.sentinel)
                     if process.exitcode is None:
                         await asyncio.to_thread(process.join)
                     if process.exitcode == 0:
@@ -116,7 +119,6 @@ class BoxedMathVerifier:
                 except EOFError:
                     operation.outcome = "crashed"
                 finally:
-                    loop.remove_reader(process.sentinel)
                     if process.is_alive():
                         # Even a wedged symbolic computation must release its slot on cancellation or timeout.
                         process.kill()

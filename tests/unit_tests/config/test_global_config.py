@@ -171,10 +171,18 @@ class TestGlobalConfig:
             resolve()
 
     @mark.parametrize(
-        "previous", [None, {}, {"units": False}, {"bidirectional": True}, {"units": True, "bidirectional": False}]
+        "previous",
+        [
+            {},
+            {"math_verify": None},
+            {"math_verify": {}},
+            {"math_verify": {"units": False}},
+            {"math_verify": {"bidirectional": True}},
+            {"math_verify": {"units": True, "bidirectional": False}},
+        ],
     )
     def test_stem_math_resume_uses_the_effective_grading_policy(self, previous, tmp_path):
-        settings = {"entrypoint": "app.py", "domain": "other", "math_verify": previous}
+        settings = {"entrypoint": "app.py", "domain": "other", **previous}
         config = GlobalConfigDictParser().parse(
             GlobalConfigDictParserConfig(
                 initial_global_config_dict=DictConfig({"my_judge": {"resources_servers": {"stem_judge": settings}}}),
@@ -184,8 +192,12 @@ class TestGlobalConfig:
             )
         )
         resolved = OmegaConf.to_container(config, resolve=True)
-        effective = resolved["my_judge"]["resources_servers"]["stem_judge"]["math_verify"]
-        assert effective == ({"units": False, "bidirectional": True} | previous if previous is not None else None)
+        instance = resolved["my_judge"]["resources_servers"]["stem_judge"]
+        if isinstance(options := previous.get("math_verify"), dict):
+            assert instance["math_verify"] == {"units": False, "bidirectional": True} | options
+        else:
+            assert ("math_verify" in instance) == ("math_verify" in previous)
+            assert instance.get("math_verify") is None
 
         source = tmp_path / "rows.jsonl"
         source.write_text("{}\n")
@@ -194,10 +206,11 @@ class TestGlobalConfig:
         current.write(manifest)
         assert validate_resume(manifest, current, source).run_id == current.run_id
 
-        resolved["my_judge"]["resources_servers"]["stem_judge"]["math_verify"] = previous
+        compatible = instance.get("math_verify") == previous.get("math_verify")
+        instance.update(previous)
         older = RunManifest.create(source, [{}], {}, resolved)
         older.write(manifest)
-        if previous == effective:
+        if compatible:
             assert validate_resume(manifest, current, source).run_id == older.run_id
         else:
             with raises(ResumeRefusedError, match="math_verify"):
