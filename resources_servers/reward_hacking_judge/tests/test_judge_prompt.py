@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
 import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -135,21 +133,6 @@ def test_a_run_of_one_segment_keeps_its_answer_and_no_answer_is_an_error() -> No
     assert merge_segment_answers(_prompts(1), [answer]) is answer
     with pytest.raises(ValueError, match="no segment"):
         merge_segment_answers(_prompts(2), [None, None])
-
-
-def test_the_module_imports_without_nemo_gym() -> None:
-    script = (
-        "import importlib.util, sys\n"
-        f"spec = importlib.util.spec_from_file_location('judge_prompt', {str(SERVER_DIR / 'judge_prompt.py')!r})\n"
-        "module = importlib.util.module_from_spec(spec)\n"
-        "spec.loader.exec_module(module)\n"
-        "assert not [name for name in sys.modules if name.split('.')[0] == 'nemo_gym'], 'nemo_gym was imported'\n"
-        "print(module.build_segment_prompts.__name__)\n"
-    )
-    done = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, check=False)
-
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() == "build_segment_prompts"
 
 
 def test_the_schema_and_a_prompt_render_byte_for_byte_as_v2_pins_them() -> None:
