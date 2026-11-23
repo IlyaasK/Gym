@@ -9,7 +9,6 @@ dependencies = [
     "nemo-gym[dev]",
     "math-verify==0.8.0",
     "sympy",
-    "pyyaml",
 ]
 
 [tool.uv]

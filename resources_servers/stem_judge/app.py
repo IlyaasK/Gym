@@ -97,7 +97,6 @@ from resources_servers.stem_judge.answer_options import (
     answer_template,
     assistant_text,
     final_verdict,
-    load_answer_rules,
     parse_json_judgment,
 )
 from resources_servers.stem_judge.task_data import RubricCriterion, TaskData, reference_of
@@ -171,8 +170,7 @@ class StemJudgeConfig(BaseResourcesServerConfig):
         return regex
 
     guideline_scope: GuidelineScope = "stem"
-    extra_answer_rules: AnswerRuleList | str = Field(default_factory=list)
-    extra_answer_rules_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    extra_answer_rules: AnswerRuleList = Field(default_factory=list)
     verdict_mode: VerdictMode = "binary"
     verdict_format: VerdictFormat = "line"
     box_parser: Literal["exact", "last_command"] = "exact"
@@ -447,21 +445,6 @@ class StemJudgeResourcesServer(SimpleResourcesServer):
 
     config: StemJudgeConfig
 
-    @classmethod
-    def load_config_from_global_config(cls) -> StemJudgeConfig:
-        config = super().load_config_from_global_config()
-        math = config.math_verify
-        if math is not None and not {"units", "bidirectional"}.issubset(math.model_fields_set):
-            raise ValueError(
-                "The saved STEM math_verify config omits units or bidirectional. Resolve the config with Gym "
-                "before starting the worker, or explicitly set both options for this run."
-            )
-        if isinstance(config.extra_answer_rules, str) and config.extra_answer_rules_sha256 is None:
-            raise ValueError(
-                "The saved STEM config has no digest for its rule file. Resolve the config with Gym before starting the worker."
-            )
-        return config
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -477,8 +460,7 @@ class StemJudgeResourcesServer(SimpleResourcesServer):
                 verdict_mode=self.config.verdict_mode,
                 verdict_format=self.config.verdict_format,
             )
-        rules = load_answer_rules(self.config.extra_answer_rules, self.config.extra_answer_rules_sha256)
-        self._answer_template = add_answer_rules(template, rules)
+        self._answer_template = add_answer_rules(template, self.config.extra_answer_rules)
         with open(self.config.rubric_prompt_template_fpath, encoding="utf-8") as f:
             self._rubric_template = f.read().strip()
         # A custom template with an unknown placeholder or a stray brace fails here, not on every judged row.
@@ -486,7 +468,7 @@ class StemJudgeResourcesServer(SimpleResourcesServer):
         self._rubric_template.format(question="", expected_answer="", rubric="", generated_answer="")
 
         self._math_library = None
-        if (math_config := self.config.math_verify) is not None and not rules:
+        if (math_config := self.config.math_verify) is not None and not self.config.extra_answer_rules:
             from resources_servers.stem_judge.boxed_math import BoxedMathVerifier
 
             self._math_library = BoxedMathVerifier(math_config, self.config.name)

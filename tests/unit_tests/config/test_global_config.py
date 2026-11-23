@@ -17,7 +17,6 @@ import importlib.metadata
 import sys
 from argparse import ArgumentParser
 from contextlib import nullcontext as does_not_raise
-from hashlib import sha256
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, PropertyMock
@@ -68,7 +67,6 @@ from nemo_gym.config.global_config import (
 )
 from nemo_gym.config.secret_utils import hide_secrets_in_overrides, recursively_hide_secrets
 from nemo_gym.rollouts.rollout_collection import _environment_servers_by_agent
-from nemo_gym.rollouts.rollout_recovery import ResumeRefusedError, RunManifest, validate_resume
 
 
 @fixture(autouse=True)
@@ -139,82 +137,6 @@ class TestGlobalConfig:
 
         global_config_dict = get_global_config_dict()
         assert self._default_global_config_dict_values == global_config_dict
-
-    def test_stem_rule_file_is_pinned_in_the_resolved_instance(self, tmp_path, monkeypatch):
-        root = tmp_path / "resources_servers" / "stem_judge"
-        root.mkdir(parents=True)
-        (root / "pyproject.toml").touch()
-        rules = root / "rules.yaml"
-        rules.write_text("- Require metres.")
-        monkeypatch.setenv(NEMO_GYM_EXTRA_ROOTS_ENV_VAR_NAME, str(tmp_path))
-        settings = {"entrypoint": "app.py", "domain": "other", "extra_answer_rules": "rules.yaml"}
-
-        def resolve():
-            cfg = GlobalConfigDictParser().parse(
-                GlobalConfigDictParserConfig(
-                    initial_global_config_dict=DictConfig(
-                        {"my_judge": {"resources_servers": {"stem_judge": settings}}}
-                    ),
-                    skip_load_from_cli=True,
-                    skip_load_from_dotenv=True,
-                    offline=True,
-                )
-            )
-            return cfg.my_judge.resources_servers.stem_judge
-
-        digest = resolve().extra_answer_rules_sha256
-        assert digest == sha256(rules.read_bytes()).hexdigest()
-        rules.write_text("- Require seconds.")
-        assert resolve().extra_answer_rules_sha256 != digest
-        settings["extra_answer_rules_sha256"] = digest
-        with raises(ConfigError, match="differs from its saved SHA-256"):
-            resolve()
-
-    @mark.parametrize(
-        "previous",
-        [
-            {},
-            {"math_verify": None},
-            {"math_verify": {}},
-            {"math_verify": {"units": False}},
-            {"math_verify": {"bidirectional": True}},
-            {"math_verify": {"units": True, "bidirectional": False}},
-        ],
-    )
-    def test_stem_math_resume_uses_the_effective_grading_policy(self, previous, tmp_path):
-        settings = {"entrypoint": "app.py", "domain": "other", **previous}
-        config = GlobalConfigDictParser().parse(
-            GlobalConfigDictParserConfig(
-                initial_global_config_dict=DictConfig({"my_judge": {"resources_servers": {"stem_judge": settings}}}),
-                skip_load_from_cli=True,
-                skip_load_from_dotenv=True,
-                offline=True,
-            )
-        )
-        resolved = OmegaConf.to_container(config, resolve=True)
-        instance = resolved["my_judge"]["resources_servers"]["stem_judge"]
-        if isinstance(options := previous.get("math_verify"), dict):
-            assert instance["math_verify"] == {"units": False, "bidirectional": True} | options
-        else:
-            assert ("math_verify" in instance) == ("math_verify" in previous)
-            assert instance.get("math_verify") is None
-
-        source = tmp_path / "rows.jsonl"
-        source.write_text("{}\n")
-        manifest = tmp_path / "run.manifest.json"
-        current = RunManifest.create(source, [{}], {}, resolved)
-        current.write(manifest)
-        assert validate_resume(manifest, current, source).run_id == current.run_id
-
-        compatible = instance.get("math_verify") == previous.get("math_verify")
-        instance.update(previous)
-        older = RunManifest.create(source, [{}], {}, resolved)
-        older.write(manifest)
-        if compatible:
-            assert validate_resume(manifest, current, source).run_id == older.run_id
-        else:
-            with raises(ResumeRefusedError, match="math_verify"):
-                validate_resume(manifest, current, source)
 
     def test_offline_resolution_uses_invalid_port_without_probing(self, monkeypatch: MonkeyPatch) -> None:
         self._mock_versions_for_testing(monkeypatch)
