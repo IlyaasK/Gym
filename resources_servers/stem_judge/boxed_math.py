@@ -106,6 +106,7 @@ class BoxedMathVerifier:
     async def matches(self, reference: str, box: str) -> bool:
         async with resources_operation(self.slots, operation="verify", executor="subprocess") as operation:
             # Own both ends before forking so a failed launch releases every descriptor.
+            loop = asyncio.get_running_loop()
             receiver, sender = socket.socketpair()
             with receiver, sender:
                 parent_pid = os.getpid()
@@ -120,7 +121,6 @@ class BoxedMathVerifier:
                 try:
                     sender.close()
                     receiver.setblocking(False)
-                    loop = asyncio.get_running_loop()
                     result = await asyncio.wait_for(loop.sock_recv(receiver, 1), self.config.timeout_seconds)
                     if result:
                         return result == b"1"
@@ -130,5 +130,6 @@ class BoxedMathVerifier:
                 finally:
                     if os.waitpid(pid, os.WNOHANG)[0] == 0:
                         os.kill(pid, signal.SIGKILL)
-                        await asyncio.to_thread(os.waitpid, pid, 0)
+                        # Cancellation can arrive while the reaper is waiting for an executor thread.
+                        await asyncio.shield(loop.run_in_executor(None, os.waitpid, pid, 0))
                 return False

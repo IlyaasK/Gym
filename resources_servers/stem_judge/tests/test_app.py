@@ -492,6 +492,36 @@ class TestAnswerOptions:
         assert result.grading_status == "judged" and result.reward == 1
         server.server_client.post.assert_awaited_once()
 
+    async def test_cancellation_after_timeout_keeps_the_queued_reaper(self, config, monkeypatch):
+        # Hold only the submitted waitpid job, as when the default executor is busy.
+        loop = asyncio.get_running_loop()
+        executor = loop.run_in_executor
+        queued = asyncio.Event()
+        pending = loop.create_future()
+        job = []
+
+        def queue_reap(pool, fn, *args):
+            job.append((fn, args))
+            queued.set()
+            return pending
+
+        monkeypatch.setattr("resources_servers.stem_judge.boxed_math._score_box", lambda *_: time.sleep(5))
+        monkeypatch.setattr(loop, "run_in_executor", queue_reap)
+        config.math_verify = MathVerifyConfig(timeout_seconds=0.02)
+        task = asyncio.create_task(_server(config)._math_library.matches("2", "2"))
+        try:
+            await asyncio.wait_for(queued.wait(), timeout=2)
+            task.cancel()
+            with raises(asyncio.CancelledError):
+                await task
+            assert not pending.cancelled()
+        finally:
+            ((fn, args),) = job
+            result = await executor(None, fn, *args)
+            if not pending.done():
+                pending.set_result(result)
+        assert os.WIFSIGNALED(result[1]) and os.WTERMSIG(result[1]) == signal.SIGKILL
+
     async def test_cancelling_symbolic_workers_keeps_the_loop_responsive(self, config, monkeypatch, tmp_path):
         def unresponsive_worker(reference, *_):
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
