@@ -181,6 +181,7 @@ Free answers, whole-answer comparisons and rubric rows always use the judge. Gym
 marks the individual sample. On NeMo RL branches that provide SingleController's
 `grpo.exclude_failed_judge_groups`, enable it with NeMo Gym, `grpo.use_dynamic_sampling=true`
 and `env.should_mask_flagged_samples=true` to exclude and refill the entire group.
+On NeMo RL main, `grpo.masked_reward_policy: exclude` excludes masked samples from the group baseline.
 
 If recovery rejudges a saved answer, a parsed `unresolved` verdict completes the
 regrade once. The saved answer stays masked with unknown correctness. A malformed
@@ -220,8 +221,8 @@ For this row, `\boxed{0.5}` earns 1 through Math-Verify. If the library cannot
 establish equivalence, the configured STEM judge sees the question, reference and
 selected box. The STEM process runs the library check locally.
 
-The question-bank preset requests a structured explanation. Select `verdict_format: line`
-to use the text verdict instead.
+The question-bank preset requests a structured explanation. For a line verdict, append
+`++stem_judge.resources_servers.stem_judge.verdict_format=line` to the launch command.
 The model returns one JSON object, for example:
 
 ```json
