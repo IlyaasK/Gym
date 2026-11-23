@@ -20,6 +20,8 @@ import hashlib
 import json
 import multiprocessing as mp
 import signal
+import socket
+import sys
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -493,6 +495,37 @@ class TestAnswerOptions:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    @mark.skipif(sys.platform != "linux", reason="Linux server worker replacement")
+    def test_scorer_releases_inherited_socket_when_server_worker_dies(self, monkeypatch):
+        from resources_servers.stem_judge.boxed_math import BoxedMathVerifier
+
+        peer, inherited = socket.socketpair()
+
+        def busy_metric(**_):
+            inherited.sendall(b"1")
+            time.sleep(10)
+            raise ValueError("scorer outlived server")
+
+        def run_server():
+            peer.close()
+            asyncio.run(BoxedMathVerifier(MathVerifyConfig(), "stem").matches("2", "2"))
+
+        monkeypatch.setattr("resources_servers.stem_judge.boxed_math.math_metric", busy_metric)
+        owner = mp.get_context("fork").Process(target=run_server)
+        with peer, inherited:
+            owner.start()
+            try:
+                inherited.close()
+                peer.settimeout(5)
+                assert peer.recv(1) == b"1"
+                owner.kill()
+                assert peer.recv(1) == b""  # The scorer also released its copy of the socket.
+            finally:
+                if owner.is_alive():
+                    owner.kill()
+                owner.join()
+                owner.close()
 
     @mark.parametrize(
         "row,view,reply",

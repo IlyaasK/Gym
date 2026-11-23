@@ -3,9 +3,11 @@
 """Run STEM's configured Math-Verify metric in a bounded worker process."""
 
 import asyncio
+import ctypes
 import multiprocessing as mp
 import os
 import signal
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from multiprocessing.connection import Connection
@@ -62,6 +64,15 @@ def _reverse_match(box: str, reference: str, latex: LatexExtractionConfig, preci
 
 
 def _score_box(reference: str, box: str, config: "MathVerifyConfig", sender: Connection) -> None:
+    if sys.platform == "linux":
+        # A replaced server worker's fork must release its inherited listening socket.
+        pr_set_pdeathsig = 1
+        prctl = ctypes.CDLL(None).prctl
+        prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong)
+        if prctl(pr_set_pdeathsig, signal.SIGKILL, 0, 0, 0) != 0:
+            return
+        if os.getppid() != mp.parent_process().pid:  # The parent died before prctl ran.
+            return
     # The forked verifier must not run uvicorn's shutdown handlers.
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, signal.SIG_DFL)
