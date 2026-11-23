@@ -93,6 +93,20 @@ def _score_box(reference: str, box: str, config: "MathVerifyConfig", parent_pid:
         return match
 
 
+async def _reap(pid: int) -> None:
+    """Hold the scorer slot until waitpid completes, including during repeated cancellation."""
+    wait = asyncio.get_running_loop().run_in_executor(None, os.waitpid, pid, 0)
+    cancelled = False
+    while not wait.done():
+        try:
+            await asyncio.shield(wait)
+        except asyncio.CancelledError:
+            cancelled = True
+    wait.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 class BoxedMathVerifier:
     def __init__(self, config: "MathVerifyConfig", server_name: str):
         self.config = config
@@ -130,6 +144,5 @@ class BoxedMathVerifier:
                 finally:
                     if os.waitpid(pid, os.WNOHANG)[0] == 0:
                         os.kill(pid, signal.SIGKILL)
-                        # Cancellation can arrive while the reaper is waiting for an executor thread.
-                        await asyncio.shield(loop.run_in_executor(None, os.waitpid, pid, 0))
+                        await _reap(pid)
                 return False
