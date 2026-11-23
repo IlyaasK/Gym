@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import multiprocessing as mp
+import os
 import signal
 import socket
 import sys
@@ -437,9 +438,9 @@ class TestAnswerOptions:
         assert (result.reward, result.grading_status) == (1, "judged")
 
     async def test_math_timeout_defers_to_stem_verdict(self, config, monkeypatch):
-        def slow_worker(reference, box, config, sender):
+        def slow_worker(*_):
             time.sleep(1)
-            sender.send(True)
+            return True
 
         monkeypatch.setattr("resources_servers.stem_judge.boxed_math._score_box", slow_worker)
         config.boxed_judge_input = "box"
@@ -449,34 +450,57 @@ class TestAnswerOptions:
         server.server_client.post.assert_awaited_once()
         assert (result.reward, result.grading_status) == (1, "judged")
 
-    async def test_math_worker_is_reaped_if_reader_registration_fails(self, config, monkeypatch):
-        def busy_worker(*_):
-            time.sleep(5)
+    async def test_failed_fork_closes_descriptors_and_later_math_can_score(self, config, monkeypatch):
+        def unavailable():
+            raise BlockingIOError("process limit reached")
 
-        def unavailable_reader(*_):
-            raise OSError("Cannot watch the child process")
-
-        monkeypatch.setattr("resources_servers.stem_judge.boxed_math._score_box", busy_worker)
-        monkeypatch.setattr(asyncio.get_running_loop(), "add_reader", unavailable_reader)
         config.boxed_judge_input = "box"
         config.math_verify = MathVerifyConfig()
-        server = _server(config, "Judgement: 'yes'")
-        previous = set(mp.active_children())
+        server = _server(config, "Judgement: yes", "Judgement: yes")
+        req = _request(_split(r"\boxed{2}"))
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "fork", unavailable)
+            before = set(os.listdir("/dev/fd"))
+            for _ in range(2):
+                assert (await server.verify(req)).grading_status == "judged"
+            assert set(os.listdir("/dev/fd")) == before
+        assert (await server.verify(req)).grading_status == "math_verified"
+        assert server.server_client.post.await_count == 2
+
+    async def test_math_worker_is_reaped_if_read_fails(self, config, monkeypatch):
+        fork = os.fork
+        children = []
+
+        def record_fork():
+            pid = fork()
+            if pid:
+                children.append(pid)
+            return pid
+
+        async def unavailable_reader(*_):
+            raise OSError("Cannot read the result")
+
+        monkeypatch.setattr(os, "fork", record_fork)
+        monkeypatch.setattr(asyncio.get_running_loop(), "sock_recv", unavailable_reader)
+        config.boxed_judge_input = "box"
+        config.math_verify = MathVerifyConfig()
+        server = _server(config, "Judgement: yes")
         result = await server.verify(_request(_split(r"\boxed{2}")))
-        assert set(mp.active_children()) <= previous
+        (pid,) = children
+        with raises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
         assert result.grading_status == "judged" and result.reward == 1
         server.server_client.post.assert_awaited_once()
 
     async def test_cancelling_symbolic_workers_keeps_the_loop_responsive(self, config, monkeypatch, tmp_path):
         def unresponsive_worker(reference, *_):
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            (tmp_path / reference).touch()
+            (tmp_path / reference).write_text(str(os.getpid()))
             time.sleep(15)
 
         monkeypatch.setattr("resources_servers.stem_judge.boxed_math._score_box", unresponsive_worker)
         config.math_verify = MathVerifyConfig(max_concurrency=3)
         library = _server(config)._math_library
-        children_before = set(mp.active_children())
         tasks = [asyncio.create_task(library.matches(str(i), "2")) for i in range(3)]
         try:
             async with asyncio.timeout(5):
@@ -490,7 +514,9 @@ class TestAnswerOptions:
             assert loop.time() - start < 0.75
             outcomes = await asyncio.gather(*tasks, return_exceptions=True)
             assert all(isinstance(outcome, asyncio.CancelledError) for outcome in outcomes)
-            assert set(mp.active_children()) <= children_before
+            for marker in tmp_path.iterdir():
+                with raises(ChildProcessError):
+                    os.waitpid(int(marker.read_text()), os.WNOHANG)
         finally:
             for task in tasks:
                 task.cancel()

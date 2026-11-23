@@ -4,13 +4,12 @@
 
 import asyncio
 import ctypes
-import multiprocessing as mp
 import os
 import signal
+import socket
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from multiprocessing.connection import Connection
 from typing import TYPE_CHECKING
 
 from math_verify import parse, verify
@@ -63,20 +62,20 @@ def _reverse_match(box: str, reference: str, latex: LatexExtractionConfig, preci
     return True
 
 
-def _score_box(reference: str, box: str, config: "MathVerifyConfig", sender: Connection) -> None:
+def _score_box(reference: str, box: str, config: "MathVerifyConfig", parent_pid: int) -> bool:
     if sys.platform == "linux":
         # A replaced server worker's fork must release its inherited listening socket.
         pr_set_pdeathsig = 1
         prctl = ctypes.CDLL(None).prctl
         prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong)
         if prctl(pr_set_pdeathsig, signal.SIGKILL, 0, 0, 0) != 0:
-            return
-        if os.getppid() != mp.parent_process().pid:  # The parent died before prctl ran.
-            return
+            return False
+        if os.getppid() != parent_pid:  # The parent died before prctl ran.
+            return False
     # The forked verifier must not run uvicorn's shutdown handlers.
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, signal.SIG_DFL)
-    with sender, open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
+    with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
         latex = LatexExtractionConfig()
         latex = replace(latex, normalization_config=replace(latex.normalization_config, units=config.units))
         metric = math_metric(
@@ -91,7 +90,7 @@ def _score_box(reference: str, box: str, config: "MathVerifyConfig", sender: Con
                 match = _reverse_match(box, reference, latex, config.precision)
         except (ValueError, TimeoutException):
             match = False
-        sender.send(match)
+        return match
 
 
 class BoxedMathVerifier:
@@ -106,33 +105,30 @@ class BoxedMathVerifier:
 
     async def matches(self, reference: str, box: str) -> bool:
         async with resources_operation(self.slots, operation="verify", executor="subprocess") as operation:
-            ctx = mp.get_context("fork")
-            receiver, sender = ctx.Pipe(duplex=False)
+            # Own both ends before forking so a failed launch releases every descriptor.
+            receiver, sender = socket.socketpair()
             with receiver, sender:
-                process = ctx.Process(target=_score_box, args=(reference, box, self.config, sender))
-                loop = asyncio.get_running_loop()
-                exited = asyncio.Event()
-                process.start()
+                parent_pid = os.getpid()
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        receiver.close()
+                        matched = _score_box(reference, box, self.config, parent_pid)
+                        sender.sendall(b"1" if matched else b"0")
+                    finally:
+                        os._exit(0)  # Never resume the server event loop in the child.
                 try:
                     sender.close()
-                    loop.add_reader(process.sentinel, exited.set)
-                    try:
-                        await asyncio.wait_for(exited.wait(), self.config.timeout_seconds)
-                    finally:
-                        loop.remove_reader(process.sentinel)
-                    if process.exitcode is None:
-                        await asyncio.to_thread(process.join)
-                    if process.exitcode == 0:
-                        return receiver.recv()
+                    receiver.setblocking(False)
+                    loop = asyncio.get_running_loop()
+                    result = await asyncio.wait_for(loop.sock_recv(receiver, 1), self.config.timeout_seconds)
+                    if result:
+                        return result == b"1"
                     operation.outcome = "crashed"
                 except TimeoutError:
                     operation.outcome = "timeout"
-                except EOFError:
-                    operation.outcome = "crashed"
                 finally:
-                    if process.is_alive():
-                        # Even a wedged symbolic computation must release its slot on cancellation or timeout.
-                        process.kill()
-                        await asyncio.to_thread(process.join)
-                    process.close()
+                    if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                        os.kill(pid, signal.SIGKILL)
+                        await asyncio.to_thread(os.waitpid, pid, 0)
                 return False

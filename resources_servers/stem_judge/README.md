@@ -197,11 +197,14 @@ At 6 places, `0.0000001` and `0.0000002` compare equal. At 12 they go to the jud
 For reference `1`, the library accepts `9=1` in only one direction, so STEM
 sends that box to the judge. It accepts `x=1` in both directions. Only a
 forward match between different strings incurs a second comparison. Both
-comparisons share one worker and timeout. For mathematical sets, STEM also asks
+comparisons share one worker and one time limit (`timeout_seconds`, default 10).
+Each server worker runs up to `max_concurrency` comparisons at once (default 8).
+The time limit starts after a slot is available and the scorer launches.
+For parsed mathematical sets, STEM also asks
 SymPy to prove that their symmetric difference is empty. An open interval and its endpoint set go to the model judge. Equivalent
 intervals and reordered finite sets can still earn automatic credit. For a chain
-such as `x=2=1`, the reverse check accounts for each equality. A contradiction
-or additional unresolved constraint goes to the judge.
+such as `x=2=1`, the reverse check compares the constraints retained by the parser.
+If the library drops part of the input, both directions can still agree on an incorrect answer.
 
 For example, add this override to the question-bank launch command to configure one
 STEM instance for algebra:
